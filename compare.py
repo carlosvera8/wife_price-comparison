@@ -10,23 +10,10 @@ Usage:
 import argparse
 import asyncio
 import os
-import sys
-from pathlib import Path
 
 from dotenv import load_dotenv
 
 load_dotenv()
-
-
-def _validate_env() -> bool:
-    if not os.getenv("ANTHROPIC_API_KEY"):
-        print(
-            "Error: ANTHROPIC_API_KEY is not set.\n"
-            "Copy .env.example to .env and add your key:\n\n"
-            "  cp .env.example .env\n"
-        )
-        return False
-    return True
 
 
 def main() -> None:
@@ -84,9 +71,6 @@ def main() -> None:
 
     if args.headful:
         os.environ["PLAYWRIGHT_HEADLESS"] = "false"
-
-    if not args.mock and not _validate_env():
-        sys.exit(1)
 
     from orchestrator import run_comparison
 

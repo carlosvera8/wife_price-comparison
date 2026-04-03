@@ -1,15 +1,33 @@
 import asyncio
-import json
 import random
 from typing import Optional
 
 from .base import BaseScraper, RawProduct
 
+# Headers that make Playwright page requests look more like a real browser.
+# Sec-Fetch-* headers are sent automatically by Chrome but NOT by Playwright by default.
+_PAGE_HEADERS = {
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Accept-Encoding": "gzip, deflate, br",
+    "Sec-Fetch-Dest": "document",
+    "Sec-Fetch-Mode": "navigate",
+    "Sec-Fetch-Site": "none",
+    "Sec-Fetch-User": "?1",
+    "Upgrade-Insecure-Requests": "1",
+    "DNT": "1",
+}
+
+_MAX_RETRIES = 2
+
 
 class WalmartScraper(BaseScraper):
     """
     Scrapes Walmart by intercepting the internal Next.js JSON API calls
-    rather than parsing DOM elements. This is more resilient to layout changes.
+    rather than parsing DOM elements. More resilient to layout changes.
+
+    WARNING: Walmart uses Akamai Bot Manager. Detection is possible even with
+    stealth measures. The scraper retries up to 2 times on empty results.
     """
 
     async def get_store_id(self, zip_code: str, page) -> Optional[str]:
@@ -26,6 +44,7 @@ class WalmartScraper(BaseScraper):
                 except Exception:
                     pass
 
+        await page.set_extra_http_headers(_PAGE_HEADERS)
         page.on("response", handle_response)
         try:
             url = (
@@ -41,17 +60,15 @@ class WalmartScraper(BaseScraper):
 
         return store_id
 
-    async def search_products(
+    async def _attempt_search(
         self,
         query: str,
         zip_code: str,
+        store_id: str,
         page,
-        max_results: int = 3,
+        max_results: int,
     ) -> list[RawProduct]:
-        store_id = await self.get_store_id(zip_code, page)
-        if not store_id:
-            return []
-
+        """Single scrape attempt. Returns [] on block or failure."""
         captured: list[RawProduct] = []
 
         async def intercept_search(response):
@@ -89,7 +106,7 @@ class WalmartScraper(BaseScraper):
 
         delay_ms = self.config.get("request_delay_ms", 2000)
         jitter = random.randint(-400, 400)
-        await page.wait_for_timeout(max(500, delay_ms + jitter))
+        await page.wait_for_timeout(max(800, delay_ms + jitter))
 
         try:
             search_url = (
@@ -97,14 +114,37 @@ class WalmartScraper(BaseScraper):
                 f"&store={store_id}"
             )
             await page.goto(search_url, wait_until="domcontentloaded", timeout=30000)
-            # Allow time for the Next.js internal data fetch to fire
             await page.wait_for_timeout(3500)
         except Exception:
             pass
 
         page.remove_listener("response", intercept_search)
 
-        if self._check_blocked_title(await page.title()):
+        title = await page.title()
+        if self._check_blocked_title(title):
             return []
 
         return captured
+
+    async def search_products(
+        self,
+        query: str,
+        zip_code: str,
+        page,
+        max_results: int = 3,
+    ) -> list[RawProduct]:
+        await page.set_extra_http_headers(_PAGE_HEADERS)
+
+        store_id = await self.get_store_id(zip_code, page)
+        if not store_id:
+            return []
+
+        for attempt in range(1, _MAX_RETRIES + 1):
+            results = await self._attempt_search(query, zip_code, store_id, page, max_results)
+            if results:
+                return results
+            if attempt < _MAX_RETRIES:
+                # Back off before retrying
+                await asyncio.sleep(3 + random.uniform(0, 2))
+
+        return []

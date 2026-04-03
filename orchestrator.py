@@ -134,12 +134,27 @@ async def run_comparison(
                 viewport={"width": 1280, "height": 800},
                 locale="en-US",
                 timezone_id="America/New_York",
+                # Randomise viewport slightly so every run has a different fingerprint
+                device_scale_factor=random.choice([1, 1.25, 1.5, 2]),
             )
 
-            # Spoof navigator.webdriver
+            # Sec-Fetch-* headers: sent automatically by real Chrome but NOT by
+            # Playwright by default. Adding them makes requests look legitimate.
+            await context.set_extra_http_headers({
+                "Accept-Language": "en-US,en;q=0.9",
+                "Sec-Fetch-Dest": "document",
+                "Sec-Fetch-Mode": "navigate",
+                "Sec-Fetch-Site": "none",
+                "Sec-Fetch-User": "?1",
+                "Upgrade-Insecure-Requests": "1",
+            })
+
+            # Spoof navigator.webdriver and other common automation signals
             await context.add_init_script(
                 "Object.defineProperty(navigator, 'webdriver', {get: () => undefined});"
                 "Object.defineProperty(navigator, 'plugins', {get: () => [1, 2, 3]});"
+                "Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});"
+                "window.chrome = {runtime: {}};"
             )
 
             # Create one page per scraper, stagger starts to avoid simultaneous requests
@@ -166,10 +181,10 @@ async def run_comparison(
         render_results(query, zip_code, [])
         return []
 
-    # Normalize each product via Claude API (sequential with small delay to avoid rate limits)
+    # Normalize each product using pure Python regex heuristics (synchronous)
     normalized: list[dict] = []
     for product in raw_products:
-        norm = await normalize_product(product)
+        norm = normalize_product(product)
         result = {
             "retailer": product.retailer,
             "name": product.name,
@@ -178,7 +193,6 @@ async def run_comparison(
             **norm,
         }
         normalized.append(result)
-        await asyncio.sleep(0.2)  # small delay between Claude API calls
 
     # Sort by unit_price (None values go to the end)
     normalized.sort(
