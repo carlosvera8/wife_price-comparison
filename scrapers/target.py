@@ -1,3 +1,4 @@
+import logging
 import random
 from typing import Optional
 from urllib.parse import quote_plus
@@ -5,6 +6,8 @@ from urllib.parse import quote_plus
 from curl_cffi.requests import AsyncSession
 
 from .base import BaseScraper, RawProduct
+
+log = logging.getLogger(__name__)
 
 # Target's internal API key — embedded in their public frontend.
 # If this stops working: open target.com in devtools, find any /v3/plp/search
@@ -44,16 +47,24 @@ class TargetScraper(BaseScraper):
             f"https://api.target.com/fulfillment/v1/stores"
             f"?zip={zip_code}&limit=1&key={_TARGET_API_KEY}"
         )
+        log.debug("Target store lookup: GET %s", url)
         try:
             async with AsyncSession(impersonate="chrome131") as session:
                 resp = await session.get(url, headers=_HEADERS, timeout=15)
+                log.debug("Target store lookup: HTTP %d", resp.status_code)
                 if resp.status_code == 200:
                     data = resp.json()
                     stores = data.get("stores", [])
                     if stores:
-                        return str(stores[0].get("location_id", ""))
-        except Exception:
-            pass
+                        store_id = str(stores[0].get("location_id", ""))
+                        log.debug("Target store found: id=%s name=%s", store_id, stores[0].get("name", ""))
+                        return store_id
+                    else:
+                        log.debug("Target store lookup: no stores returned for ZIP %s", zip_code)
+                else:
+                    log.debug("Target store lookup: unexpected response body: %s", resp.text[:300])
+        except Exception as e:
+            log.debug("Target store lookup exception: %s", e)
         return None
 
     async def search_products(
@@ -65,12 +76,12 @@ class TargetScraper(BaseScraper):
     ) -> list[RawProduct]:
         store_id = await self.get_store_id(zip_code, page)
         if not store_id:
+            log.debug("Target search aborted: no store found for ZIP %s", zip_code)
             return []
 
         delay_ms = self.config.get("request_delay_ms", 1500)
         jitter = random.randint(-300, 300)
 
-        # Small human-like delay between store lookup and search
         import asyncio
         await asyncio.sleep(max(0.5, (delay_ms + jitter) / 1000))
 
@@ -84,12 +95,15 @@ class TargetScraper(BaseScraper):
             f"&offset=0"
             f"&include_sponsored_search_v2=true"
         )
+        log.debug("Target product search: GET %s", url)
 
         captured: list[RawProduct] = []
         try:
             async with AsyncSession(impersonate="chrome131") as session:
                 resp = await session.get(url, headers=_HEADERS, timeout=20)
+                log.debug("Target product search: HTTP %d", resp.status_code)
                 if resp.status_code != 200:
+                    log.debug("Target product search: non-200 body: %s", resp.text[:300])
                     return []
 
                 data = resp.json()
@@ -98,14 +112,15 @@ class TargetScraper(BaseScraper):
                     .get("search", {})
                     .get("products", [])
                 )
+                log.debug("Target product search: %d products returned", len(products))
 
                 for item in products[:max_results]:
                     price_info = item.get("price", {})
                     current_price = price_info.get("current_retail")
                     if current_price is None:
+                        log.debug("Target: skipping item with no current_retail price")
                         continue
 
-                    # Use retailer-provided unit price when available
                     unit_price_info = price_info.get("unit_price", {})
                     unit_desc = ""
                     if unit_price_info and unit_price_info.get("price"):
@@ -124,16 +139,19 @@ class TargetScraper(BaseScraper):
                         unit_desc = " | ".join(bullets[:2])
 
                     tcin = item_attrs.get("tcin", "")
+                    name = item_attrs.get("product_description", {}).get("title", "")
+                    log.debug("Target: captured '%s' @ $%s (unit_desc=%r)", name, current_price, unit_desc)
                     captured.append(
                         RawProduct(
                             retailer="Target",
-                            name=item_attrs.get("product_description", {}).get("title", ""),
+                            name=name,
                             price_str=f"${current_price}",
                             unit_desc=unit_desc,
                             url=f"https://www.target.com/p/-/A-{tcin}" if tcin else "https://www.target.com",
                         )
                     )
-        except Exception:
-            pass
+        except Exception as e:
+            log.debug("Target product search exception: %s", e, exc_info=True)
 
+        log.debug("Target: returning %d products", len(captured))
         return captured

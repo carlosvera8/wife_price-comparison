@@ -9,6 +9,7 @@ Usage:
 """
 import argparse
 import asyncio
+import logging
 import os
 
 from dotenv import load_dotenv
@@ -66,8 +67,18 @@ def main() -> None:
         action="store_true",
         help="Show the browser window while scraping (useful for debugging)",
     )
+    parser.add_argument(
+        "--debug",
+        action="store_true",
+        help="Print detailed debug logs for each scraper step",
+    )
 
     args = parser.parse_args()
+
+    logging.basicConfig(
+        level=logging.DEBUG if args.debug else logging.WARNING,
+        format="%(levelname)s [%(name)s] %(message)s",
+    )
 
     if args.headful:
         os.environ["PLAYWRIGHT_HEADLESS"] = "false"

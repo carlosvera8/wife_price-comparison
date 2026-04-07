@@ -1,9 +1,12 @@
 import asyncio
+import logging
 import random
 from typing import Optional
 from urllib.parse import quote_plus
 
 from .base import BaseScraper, RawProduct
+
+log = logging.getLogger(__name__)
 
 
 class GiantFoodScraper(BaseScraper):
@@ -14,40 +17,54 @@ class GiantFoodScraper(BaseScraper):
     """
 
     async def get_store_id(self, zip_code: str, page) -> Optional[str]:
+        log.debug("Giant Food store lookup: navigating to store-locator for ZIP %s", zip_code)
         try:
-            # Navigate to store finder and enter ZIP to set the store session cookie
             await page.goto(
                 "https://giantfood.com/store-locator",
                 wait_until="domcontentloaded",
                 timeout=20000,
             )
+            log.debug("Giant Food store lookup: page loaded, title=%r", await page.title())
             await page.wait_for_timeout(1500)
 
-            # Fill in ZIP and submit
             zip_input = page.locator("input[placeholder*='ZIP'], input[type='search'], input[name='zip']")
+            zip_count = await zip_input.count()
+            log.debug("Giant Food store lookup: ZIP input elements found: %d", zip_count)
+            if zip_count == 0:
+                log.debug("Giant Food store lookup: no ZIP input found — page HTML snippet: %s", (await page.content())[:500])
+                return None
+
             await zip_input.first.fill(zip_code)
             await zip_input.first.press("Enter")
             await page.wait_for_timeout(2000)
 
-            # Click the first store result to set the store cookie
             store_btn = page.locator("button:has-text('Set as my store'), a:has-text('Shop this store'), button:has-text('Shop here')")
-            if await store_btn.count() > 0:
+            btn_count = await store_btn.count()
+            log.debug("Giant Food store lookup: store action buttons found: %d", btn_count)
+            if btn_count > 0:
                 await store_btn.first.click()
                 await page.wait_for_timeout(1500)
+            else:
+                log.debug("Giant Food store lookup: no 'set store' button found after ZIP search")
 
-            # Extract store ID from cookies or URL
             cookies = await page.context.cookies()
+            log.debug("Giant Food store lookup: cookies after store selection: %s", [c["name"] for c in cookies])
             for c in cookies:
                 if "store" in c["name"].lower() and c["value"].isdigit():
+                    log.debug("Giant Food store lookup: found store cookie %s=%s", c["name"], c["value"])
                     return c["value"]
 
-            # Fallback: extract from current URL if redirected to a store page
             url = page.url
+            log.debug("Giant Food store lookup: current URL after store selection: %s", url)
             if "/stores/" in url:
-                return url.split("/stores/")[-1].split("/")[0]
+                store_id = url.split("/stores/")[-1].split("/")[0]
+                log.debug("Giant Food store lookup: extracted store ID from URL: %s", store_id)
+                return store_id
 
-        except Exception:
-            pass
+            log.debug("Giant Food store lookup: could not determine store ID")
+
+        except Exception as e:
+            log.debug("Giant Food store lookup exception: %s", e, exc_info=True)
 
         return None
 
@@ -58,7 +75,6 @@ class GiantFoodScraper(BaseScraper):
         page,
         max_results: int = 3,
     ) -> list[RawProduct]:
-        # Set the store context first (sets session cookie)
         await self.get_store_id(zip_code, page)
 
         delay_ms = self.config.get("request_delay_ms", 2000)
@@ -72,17 +88,24 @@ class GiantFoodScraper(BaseScraper):
                 f"https://giantfood.com/search?query={quote_plus(query)}"
                 f"&sort=relevance&inStockOnly=false"
             )
+            log.debug("Giant Food product search: navigating to %s", search_url)
             await page.goto(search_url, wait_until="domcontentloaded", timeout=30000)
             await page.wait_for_timeout(2500)
 
-            if self._check_blocked_title(await page.title()):
+            title = await page.title()
+            log.debug("Giant Food product search: page title=%r", title)
+            if self._check_blocked_title(title):
+                log.debug("Giant Food product search: blocked by bot detection")
                 return []
 
-            # Product cards — Giant Food uses a consistent product card structure
             product_cards = page.locator(
                 "[data-testid='product-card'], .product-card, article[class*='product']"
             )
             count = await product_cards.count()
+            log.debug("Giant Food product search: product cards found: %d", count)
+
+            if count == 0:
+                log.debug("Giant Food product search: no cards — page HTML snippet: %s", (await page.content())[:800])
 
             for i in range(min(count, max_results)):
                 card = product_cards.nth(i)
@@ -104,6 +127,7 @@ class GiantFoodScraper(BaseScraper):
                     href = await link_el.first.get_attribute("href") if await link_el.count() > 0 else ""
                     url = f"https://giantfood.com{href}" if href and href.startswith("/") else (href or "https://giantfood.com")
 
+                    log.debug("Giant Food: card %d — name=%r price=%r unit=%r", i, name, price_str, unit_desc)
                     if name and price_str:
                         captured.append(
                             RawProduct(
@@ -114,10 +138,14 @@ class GiantFoodScraper(BaseScraper):
                                 url=url,
                             )
                         )
-                except Exception:
+                    else:
+                        log.debug("Giant Food: card %d skipped (missing name or price)", i)
+                except Exception as e:
+                    log.debug("Giant Food: card %d exception: %s", i, e)
                     continue
 
-        except Exception:
-            pass
+        except Exception as e:
+            log.debug("Giant Food product search exception: %s", e, exc_info=True)
 
+        log.debug("Giant Food: returning %d products", len(captured))
         return captured

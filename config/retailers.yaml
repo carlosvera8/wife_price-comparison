@@ -1,11 +1,4 @@
 retailers:
-  - id: walmart
-    name: "Walmart"
-    class: WalmartScraper
-    base_url: "https://www.walmart.com"
-    enabled: true
-    request_delay_ms: 2500
-
   - id: target
     name: "Target"
     class: TargetScraper
@@ -19,3 +12,13 @@ retailers:
     base_url: "https://giantfood.com"
     enabled: true
     request_delay_ms: 2000
+
+  # Walmart is a fallback — only used if all primary retailers return no results.
+  # Set enabled: true to include it in every run.
+  - id: walmart
+    name: "Walmart"
+    class: WalmartScraper
+    base_url: "https://www.walmart.com"
+    enabled: false
+    fallback: true
+    request_delay_ms: 2500
