@@ -8,9 +8,13 @@ from typing import Optional
 
 import yaml
 from playwright.async_api import async_playwright
+from rich.console import Console
+from rich.progress import Progress, SpinnerColumn, TextColumn
 
 from normalizer import normalize_product
 from scrapers.base import BaseScraper, RawProduct
+
+_console = Console()
 
 
 # ---------------------------------------------------------------------------
@@ -82,10 +86,10 @@ async def _safe_scrape(
             timeout=60.0,
         )
     except asyncio.TimeoutError:
-        print(f"[yellow]Warning: {scraper.name} timed out — skipping[/yellow]")
+        _console.print(f"[yellow]Warning: {scraper.name} timed out — skipping[/yellow]")
         return []
     except Exception as e:
-        print(f"[yellow]Warning: {scraper.name} failed ({e}) — skipping[/yellow]")
+        _console.print(f"[yellow]Warning: {scraper.name} failed ({e}) — skipping[/yellow]")
         return []
 
 
@@ -108,72 +112,85 @@ async def run_comparison(
     from output import render_results
 
     if mock:
+        _console.print(f'\n[dim]Using mock data for "[bold]{query}[/bold]" near {zip_code}[/dim]\n')
         raw_products = [RawProduct(**p) for p in _MOCK_PRODUCTS]
         if retailer_filter:
             raw_products = [p for p in raw_products if p.retailer.lower().replace(" ", "_") in retailer_filter]
     else:
         scrapers = _load_scrapers(retailer_filter)
         if not scrapers:
-            print("No enabled retailers matched your filter.")
+            _console.print("No enabled retailers matched your filter.")
             return []
 
         headless = os.getenv("PLAYWRIGHT_HEADLESS", "true").lower() != "false"
+        _console.print(f'\nSearching for "[bold]{query}[/bold]" near {zip_code}...\n')
 
-        async with async_playwright() as pw:
-            browser = await pw.chromium.launch(
-                headless=headless,
-                args=[
-                    "--disable-blink-features=AutomationControlled",
-                    "--no-sandbox",
-                    "--disable-dev-shm-usage",
-                ],
-            )
-
-            context = await browser.new_context(
-                user_agent=_pick_random_ua(),
-                viewport={"width": 1280, "height": 800},
-                locale="en-US",
-                timezone_id="America/New_York",
-                # Randomise viewport slightly so every run has a different fingerprint
-                device_scale_factor=random.choice([1, 1.25, 1.5, 2]),
-            )
-
-            # Sec-Fetch-* headers: sent automatically by real Chrome but NOT by
-            # Playwright by default. Adding them makes requests look legitimate.
-            await context.set_extra_http_headers({
-                "Accept-Language": "en-US,en;q=0.9",
-                "Sec-Fetch-Dest": "document",
-                "Sec-Fetch-Mode": "navigate",
-                "Sec-Fetch-Site": "none",
-                "Sec-Fetch-User": "?1",
-                "Upgrade-Insecure-Requests": "1",
-            })
-
-            # Spoof navigator.webdriver and other common automation signals
-            await context.add_init_script(
-                "Object.defineProperty(navigator, 'webdriver', {get: () => undefined});"
-                "Object.defineProperty(navigator, 'plugins', {get: () => [1, 2, 3]});"
-                "Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});"
-                "window.chrome = {runtime: {}};"
-            )
-
-            # Create one page per scraper, stagger starts to avoid simultaneous requests
-            pages = [await context.new_page() for _ in scrapers]
-
-            async def staggered_scrape(i: int, scraper: BaseScraper, page):
-                await asyncio.sleep(i * 1.5)
-                return await _safe_scrape(scraper, query, zip_code, page, max_results)
-
-            tasks = [
-                staggered_scrape(i, scraper, page)
-                for i, (scraper, page) in enumerate(zip(scrapers, pages))
+        with Progress(SpinnerColumn(), TextColumn("{task.description}"), console=_console) as progress:
+            task_ids = [
+                progress.add_task(f"  [dim]{s.name:<14}[/dim]  Searching...", total=None)
+                for s in scrapers
             ]
-            results_nested = await asyncio.gather(*tasks)
 
-            for page in pages:
-                await page.close()
-            await context.close()
-            await browser.close()
+            async def _tracked(i: int, scraper: BaseScraper, page, task_id):
+                await asyncio.sleep(i * 1.5)
+                results = await _safe_scrape(scraper, query, zip_code, page, max_results)
+                count = len(results)
+                if count:
+                    progress.update(task_id, description=f"  [green]✓[/green]  {scraper.name:<14}  {count} result{'s' if count != 1 else ''}")
+                else:
+                    progress.update(task_id, description=f"  [red]✗[/red]  {scraper.name:<14}  no results")
+                progress.stop_task(task_id)
+                return results
+
+            async with async_playwright() as pw:
+                browser = await pw.chromium.launch(
+                    headless=headless,
+                    args=[
+                        "--disable-blink-features=AutomationControlled",
+                        "--no-sandbox",
+                        "--disable-dev-shm-usage",
+                    ],
+                )
+
+                context = await browser.new_context(
+                    user_agent=_pick_random_ua(),
+                    viewport={"width": 1280, "height": 800},
+                    locale="en-US",
+                    timezone_id="America/New_York",
+                    device_scale_factor=random.choice([1, 1.25, 1.5, 2]),
+                )
+
+                # Sec-Fetch-* headers: sent automatically by real Chrome but NOT by
+                # Playwright by default. Adding them makes requests look legitimate.
+                await context.set_extra_http_headers({
+                    "Accept-Language": "en-US,en;q=0.9",
+                    "Sec-Fetch-Dest": "document",
+                    "Sec-Fetch-Mode": "navigate",
+                    "Sec-Fetch-Site": "none",
+                    "Sec-Fetch-User": "?1",
+                    "Upgrade-Insecure-Requests": "1",
+                })
+
+                # Spoof navigator.webdriver and other common automation signals
+                await context.add_init_script(
+                    "Object.defineProperty(navigator, 'webdriver', {get: () => undefined});"
+                    "Object.defineProperty(navigator, 'plugins', {get: () => [1, 2, 3]});"
+                    "Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});"
+                    "window.chrome = {runtime: {}};"
+                )
+
+                pages = [await context.new_page() for _ in scrapers]
+
+                tasks = [
+                    _tracked(i, scraper, page, task_ids[i])
+                    for i, (scraper, page) in enumerate(zip(scrapers, pages))
+                ]
+                results_nested = await asyncio.gather(*tasks)
+
+                for page in pages:
+                    await page.close()
+                await context.close()
+                await browser.close()
 
         raw_products = [p for sublist in results_nested for p in sublist]
 
