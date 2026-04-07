@@ -1,12 +1,7 @@
-from .base import BaseScraper, RawProduct
-from .walmart import WalmartScraper
-from .target import TargetScraper
-from .giant_food import GiantFoodScraper
+from .base import RawProduct
+from .google_shopping import search as google_shopping_search
 
 __all__ = [
-    "BaseScraper",
     "RawProduct",
-    "WalmartScraper",
-    "TargetScraper",
-    "GiantFoodScraper",
+    "google_shopping_search",
 ]

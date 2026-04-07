@@ -1,26 +1,19 @@
-import asyncio
-import importlib
-import json
 import logging
-import os
-import random
-from pathlib import Path
 from typing import Optional
 
-import yaml
-from playwright.async_api import async_playwright
 from rich.console import Console
 from rich.progress import Progress, SpinnerColumn, TextColumn
 
 from normalizer import normalize_product
-from scrapers.base import BaseScraper, RawProduct
+from scrapers.base import RawProduct
+from scrapers.google_shopping import search as google_shopping_search
 
 _console = Console()
 log = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
-# Mock data — used when --mock flag is passed (no scraping)
+# Mock data — used when --mock flag is passed (no API call)
 # ---------------------------------------------------------------------------
 
 _MOCK_PRODUCTS: list[dict] = [
@@ -49,64 +42,6 @@ _MOCK_PRODUCTS: list[dict] = [
 
 
 # ---------------------------------------------------------------------------
-# Browser helpers
-# ---------------------------------------------------------------------------
-
-def _pick_random_ua() -> str:
-    ua_path = Path(__file__).parent / "config" / "user_agents.txt"
-    agents = [line.strip() for line in ua_path.read_text().splitlines() if line.strip()]
-    return random.choice(agents)
-
-
-def _load_scrapers(retailer_filter: Optional[list[str]] = None, fallback: bool = False) -> list[BaseScraper]:
-    config_path = Path(__file__).parent / "config" / "retailers.yaml"
-    config = yaml.safe_load(config_path.read_text())
-
-    scrapers = []
-    for r in config["retailers"]:
-        is_fallback = r.get("fallback", False)
-        is_enabled = r.get("enabled", True)
-
-        if fallback:
-            # Fallback mode: only load scrapers marked as fallback
-            if not is_fallback:
-                continue
-        else:
-            # Normal mode: skip disabled and fallback-only scrapers
-            if not is_enabled or is_fallback:
-                continue
-
-        if retailer_filter and r["id"] not in retailer_filter:
-            continue
-
-        module = importlib.import_module(f"scrapers.{r['id']}")
-        cls = getattr(module, r["class"])
-        scrapers.append(cls(r))
-
-    return scrapers
-
-
-async def _safe_scrape(
-    scraper: BaseScraper,
-    query: str,
-    zip_code: str,
-    page,
-    max_results: int,
-) -> list[RawProduct]:
-    try:
-        return await asyncio.wait_for(
-            scraper.search_products(query, zip_code, page, max_results),
-            timeout=60.0,
-        )
-    except asyncio.TimeoutError:
-        _console.print(f"[yellow]Warning: {scraper.name} timed out — skipping[/yellow]")
-        return []
-    except Exception as e:
-        _console.print(f"[yellow]Warning: {scraper.name} failed ({e}) — skipping[/yellow]")
-        return []
-
-
-# ---------------------------------------------------------------------------
 # Public entry point
 # ---------------------------------------------------------------------------
 
@@ -118,109 +53,67 @@ async def run_comparison(
     mock: bool = False,
 ) -> list[dict]:
     """
-    Orchestrates scraping + normalization and returns a sorted list of result dicts.
-    Each dict has: retailer, name, price_str, url, price_usd, unit_count,
-                   unit_label, unit_price, confidence
+    Fetch products via SerpAPI Google Shopping (or mock data), normalize each
+    result, sort by unit price, and render a rich table to the terminal.
+
+    Returns the sorted list of result dicts with keys:
+        retailer, name, price_str, url,
+        price_usd, unit_count, unit_label, unit_price, confidence
     """
     from output import render_results
 
     if mock:
-        _console.print(f'\n[dim]Using mock data for "[bold]{query}[/bold]" near {zip_code}[/dim]\n')
+        _console.print(
+            f'\n[dim]Using mock data for "[bold]{query}[/bold]" near {zip_code}[/dim]\n'
+        )
         raw_products = [RawProduct(**p) for p in _MOCK_PRODUCTS]
         if retailer_filter:
-            raw_products = [p for p in raw_products if p.retailer.lower().replace(" ", "_") in retailer_filter]
+            def _mock_matches(retailer: str) -> bool:
+                normalized = retailer.lower().replace(" ", "_")
+                return any(
+                    t.lower() in normalized or normalized.startswith(t.lower())
+                    for t in retailer_filter
+                )
+            raw_products = [p for p in raw_products if _mock_matches(p.retailer)]
     else:
-        headless = os.getenv("PLAYWRIGHT_HEADLESS", "true").lower() != "false"
+        _console.print(
+            f'\nSearching "[bold]{query}[/bold]" near {zip_code}...\n'
+        )
 
-        async def _run_scrapers(scrapers: list[BaseScraper], label: str) -> list[RawProduct]:
-            _console.print(f'\n{label} "[bold]{query}[/bold]" near {zip_code}...\n')
-            log.debug("Starting scrape with %d scrapers: %s", len(scrapers), [s.name for s in scrapers])
-
-            with Progress(SpinnerColumn(), TextColumn("{task.description}"), console=_console) as progress:
-                task_ids = [
-                    progress.add_task(f"  [dim]{s.name:<14}[/dim]  Searching...", total=None)
-                    for s in scrapers
-                ]
-
-                async def _tracked(i: int, scraper: BaseScraper, page, task_id):
-                    await asyncio.sleep(i * 1.5)
-                    results = await _safe_scrape(scraper, query, zip_code, page, max_results)
-                    count = len(results)
-                    log.debug("%s returned %d products", scraper.name, count)
-                    if count:
-                        progress.update(task_id, description=f"  [green]✓[/green]  {scraper.name:<14}  {count} result{'s' if count != 1 else ''}")
-                    else:
-                        progress.update(task_id, description=f"  [red]✗[/red]  {scraper.name:<14}  no results")
-                    progress.stop_task(task_id)
-                    return results
-
-                async with async_playwright() as pw:
-                    browser = await pw.chromium.launch(
-                        headless=headless,
-                        args=[
-                            "--disable-blink-features=AutomationControlled",
-                            "--no-sandbox",
-                            "--disable-dev-shm-usage",
-                        ],
-                    )
-
-                    context = await browser.new_context(
-                        user_agent=_pick_random_ua(),
-                        viewport={"width": 1280, "height": 800},
-                        locale="en-US",
-                        timezone_id="America/New_York",
-                        device_scale_factor=random.choice([1, 1.25, 1.5, 2]),
-                    )
-
-                    # Sec-Fetch-* headers: sent automatically by real Chrome but NOT by
-                    # Playwright by default. Adding them makes requests look legitimate.
-                    await context.set_extra_http_headers({
-                        "Accept-Language": "en-US,en;q=0.9",
-                        "Sec-Fetch-Dest": "document",
-                        "Sec-Fetch-Mode": "navigate",
-                        "Sec-Fetch-Site": "none",
-                        "Sec-Fetch-User": "?1",
-                        "Upgrade-Insecure-Requests": "1",
-                    })
-
-                    # Spoof navigator.webdriver and other common automation signals
-                    await context.add_init_script(
-                        "Object.defineProperty(navigator, 'webdriver', {get: () => undefined});"
-                        "Object.defineProperty(navigator, 'plugins', {get: () => [1, 2, 3]});"
-                        "Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});"
-                        "window.chrome = {runtime: {}};"
-                    )
-
-                    pages = [await context.new_page() for _ in scrapers]
-
-                    tasks = [
-                        _tracked(i, scraper, page, task_ids[i])
-                        for i, (scraper, page) in enumerate(zip(scrapers, pages))
-                    ]
-                    results_nested = await asyncio.gather(*tasks)
-
-                    for page in pages:
-                        await page.close()
-                    await context.close()
-                    await browser.close()
-
-            return [p for sublist in results_nested for p in sublist]
-
-        # Primary scrapers (Target + Giant Food)
-        primary_scrapers = _load_scrapers(retailer_filter)
-        if not primary_scrapers:
-            _console.print("No enabled retailers matched your filter.")
-            return []
-
-        raw_products = await _run_scrapers(primary_scrapers, "Searching")
-
-        # Fallback to Walmart if primary scrapers returned nothing
-        if not raw_products:
-            fallback_scrapers = _load_scrapers(retailer_filter, fallback=True)
-            if fallback_scrapers:
-                _console.print("[yellow]No results from primary retailers — trying Walmart as fallback...[/yellow]")
-                log.debug("Primary scrapers returned nothing, loading fallback scrapers")
-                raw_products = await _run_scrapers(fallback_scrapers, "Fallback search via")
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("{task.description}"),
+            console=_console,
+            transient=True,
+        ) as progress:
+            task = progress.add_task(
+                "  [dim]Google Shopping[/dim]  Fetching...", total=None
+            )
+            try:
+                raw_products = await google_shopping_search(
+                    query=query,
+                    zip_code=zip_code,
+                    retailer_filter=retailer_filter,
+                    max_results=max_results,
+                )
+                count = len(raw_products)
+                progress.update(
+                    task,
+                    description=(
+                        f"  [green]✓[/green]  Google Shopping  "
+                        f"{count} result{'s' if count != 1 else ''}"
+                    ),
+                )
+                log.debug("SerpAPI search complete: %d products", count)
+            except EnvironmentError as e:
+                progress.stop()
+                _console.print(f"\n[red bold]Configuration error:[/red bold] {e}\n")
+                return []
+            except Exception as e:
+                progress.stop()
+                log.debug("SerpAPI search failed: %s", e, exc_info=True)
+                _console.print(f"\n[red bold]Search failed:[/red bold] {e}\n")
+                return []
 
     if not raw_products:
         render_results(query, zip_code, [])

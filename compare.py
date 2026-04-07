@@ -10,7 +10,6 @@ Usage:
 import argparse
 import asyncio
 import logging
-import os
 
 from dotenv import load_dotenv
 
@@ -45,9 +44,9 @@ def main() -> None:
         nargs="+",
         metavar="RETAILER",
         help=(
-            "Limit to specific retailer IDs. "
-            "Available: walmart, target, giant_food. "
-            "Default: all enabled retailers."
+            "Filter to specific retailers by name "
+            "(e.g. walmart, target, costco, 'giant food'). "
+            "Default: show all results."
         ),
     )
     parser.add_argument(
@@ -55,22 +54,17 @@ def main() -> None:
         type=int,
         default=3,
         metavar="N",
-        help="Max results per retailer (default: 3)",
+        help="Max results to show (per retailer when --retailers is set, total otherwise). Default: 3",
     )
     parser.add_argument(
         "--mock",
         action="store_true",
-        help="Use built-in mock data instead of scraping (for development/testing)",
-    )
-    parser.add_argument(
-        "--headful",
-        action="store_true",
-        help="Show the browser window while scraping (useful for debugging)",
+        help="Use built-in mock data instead of calling the API (for development/testing)",
     )
     parser.add_argument(
         "--debug",
         action="store_true",
-        help="Print detailed debug logs for each scraper step",
+        help="Print detailed debug logs",
     )
 
     args = parser.parse_args()
@@ -79,9 +73,6 @@ def main() -> None:
         level=logging.DEBUG if args.debug else logging.WARNING,
         format="%(levelname)s [%(name)s] %(message)s",
     )
-
-    if args.headful:
-        os.environ["PLAYWRIGHT_HEADLESS"] = "false"
 
     from orchestrator import run_comparison
 
