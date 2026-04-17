@@ -1,0 +1,450 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+  <meta name="theme-color" content="#1e40af">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="Price Checker">
+  <link rel="manifest" href="/manifest.json">
+  <link rel="apple-touch-icon" href="/icon.svg">
+  <title>Price Checker</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --blue:      #2563eb;
+      --blue-dark: #1e40af;
+      --green:     #15803d;
+      --green-bg:  #f0fdf4;
+      --green-border: #86efac;
+      --gray-50:   #f8fafc;
+      --gray-100:  #f1f5f9;
+      --gray-200:  #e2e8f0;
+      --gray-400:  #94a3b8;
+      --gray-600:  #475569;
+      --gray-700:  #334155;
+      --gray-900:  #0f172a;
+      --red:       #dc2626;
+      --red-bg:    #fef2f2;
+      --red-border:#fca5a5;
+      --radius:    12px;
+      --shadow:    0 1px 3px rgba(0,0,0,.10), 0 1px 2px rgba(0,0,0,.06);
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: var(--gray-100);
+      color: var(--gray-900);
+      min-height: 100dvh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    header {
+      background: var(--blue-dark);
+      color: white;
+      padding: 16px 20px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      position: sticky;
+      top: 0;
+      z-index: 10;
+    }
+    header h1 { font-size: 20px; font-weight: 700; letter-spacing: -.3px; }
+
+    main {
+      flex: 1;
+      padding: 20px 16px 40px;
+      max-width: 600px;
+      width: 100%;
+      margin: 0 auto;
+    }
+
+    /* ── Card ── */
+    .card {
+      background: white;
+      border-radius: var(--radius);
+      padding: 20px;
+      box-shadow: var(--shadow);
+      margin-bottom: 16px;
+    }
+
+    /* ── Form fields ── */
+    .field { margin-bottom: 16px; }
+    label {
+      display: block;
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--gray-700);
+      margin-bottom: 6px;
+    }
+    input[type="text"], input[type="search"] {
+      width: 100%;
+      padding: 12px 14px;
+      border: 1.5px solid var(--gray-200);
+      border-radius: 8px;
+      font-size: 16px;
+      color: var(--gray-900);
+      background: var(--gray-50);
+      transition: border-color .15s;
+      -webkit-appearance: none;
+    }
+    input:focus { outline: none; border-color: var(--blue); background: white; }
+
+    /* ── Filter toggle ── */
+    .filter-toggle {
+      background: none;
+      border: none;
+      color: var(--blue);
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      padding: 4px 0;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      -webkit-tap-highlight-color: transparent;
+    }
+    .filter-toggle .chevron { transition: transform .2s; display: inline-block; font-style: normal; }
+    .filter-toggle.open .chevron { transform: rotate(90deg); }
+
+    .filter-panel {
+      display: none;
+      margin-top: 12px;
+      padding: 14px;
+      background: var(--gray-50);
+      border-radius: 8px;
+      border: 1.5px solid var(--gray-200);
+    }
+    .filter-panel.open { display: block; }
+    .filter-panel-title { font-size: 13px; font-weight: 600; color: var(--gray-600); margin-bottom: 10px; }
+
+    .checkbox-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+    .check-label {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 15px;
+      color: var(--gray-700);
+      cursor: pointer;
+    }
+    .check-label input[type="checkbox"] { width: 18px; height: 18px; cursor: pointer; accent-color: var(--blue); }
+
+    /* ── Search button ── */
+    .search-btn {
+      width: 100%;
+      padding: 14px;
+      background: var(--blue);
+      color: white;
+      border: none;
+      border-radius: 8px;
+      font-size: 16px;
+      font-weight: 700;
+      cursor: pointer;
+      margin-top: 4px;
+      transition: background .15s, transform .1s;
+      -webkit-tap-highlight-color: transparent;
+    }
+    .search-btn:active { background: var(--blue-dark); transform: scale(.98); }
+    .search-btn:disabled { opacity: .6; cursor: not-allowed; transform: none; }
+
+    /* ── Loading ── */
+    .loading {
+      text-align: center;
+      padding: 48px 20px;
+      color: var(--gray-600);
+    }
+    .spinner {
+      width: 36px; height: 36px;
+      border: 3px solid var(--gray-200);
+      border-top-color: var(--blue);
+      border-radius: 50%;
+      animation: spin .7s linear infinite;
+      margin: 0 auto 14px;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* ── Results ── */
+    .results-label {
+      font-size: 12px;
+      font-weight: 700;
+      color: var(--gray-400);
+      text-transform: uppercase;
+      letter-spacing: .6px;
+      margin-bottom: 10px;
+    }
+
+    .result-card {
+      background: white;
+      border-radius: var(--radius);
+      padding: 16px;
+      box-shadow: var(--shadow);
+      margin-bottom: 12px;
+      border: 1.5px solid transparent;
+    }
+    .result-card.best { border-color: var(--green-border); background: var(--green-bg); }
+
+    .best-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      background: var(--green);
+      color: white;
+      font-size: 11px;
+      font-weight: 700;
+      padding: 3px 9px;
+      border-radius: 20px;
+      text-transform: uppercase;
+      letter-spacing: .5px;
+      margin-bottom: 8px;
+    }
+
+    .result-store {
+      font-size: 11px;
+      font-weight: 700;
+      color: var(--gray-400);
+      text-transform: uppercase;
+      letter-spacing: .6px;
+      margin-bottom: 3px;
+    }
+    .result-name {
+      font-size: 15px;
+      font-weight: 500;
+      color: var(--gray-900);
+      line-height: 1.4;
+      margin-bottom: 10px;
+    }
+    .result-pricing { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+    .result-price { font-size: 22px; font-weight: 700; }
+    .result-unit {
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--green);
+    }
+    .result-card:not(.best) .result-unit { color: var(--gray-600); }
+    .result-meta { font-size: 12px; color: var(--gray-400); margin-top: 6px; }
+    .result-link {
+      display: inline-block;
+      margin-top: 10px;
+      font-size: 13px;
+      color: var(--blue);
+      text-decoration: none;
+      font-weight: 600;
+    }
+
+    /* ── Empty / Error ── */
+    .empty {
+      text-align: center;
+      padding: 48px 20px;
+      color: var(--gray-600);
+      font-size: 15px;
+    }
+    .error-card {
+      background: var(--red-bg);
+      border: 1.5px solid var(--red-border);
+      border-radius: var(--radius);
+      padding: 16px;
+      color: var(--red);
+      font-size: 14px;
+      font-weight: 500;
+      margin-bottom: 16px;
+    }
+
+    .hidden { display: none !important; }
+  </style>
+</head>
+<body>
+
+<header>
+  <span style="font-size:22px" aria-hidden="true">🛒</span>
+  <h1>Price Checker</h1>
+</header>
+
+<main>
+  <!-- Search form -->
+  <div class="card">
+    <div class="field">
+      <label for="product">What are you looking for?</label>
+      <input type="search" id="product"
+        placeholder="e.g. paper towels, laundry detergent"
+        autocomplete="off" autocorrect="off" autocapitalize="none" spellcheck="false">
+    </div>
+
+    <div class="field">
+      <label for="zipcode">Your ZIP code</label>
+      <input type="text" id="zipcode"
+        placeholder="5-digit ZIP"
+        inputmode="numeric" pattern="[0-9]{5}" maxlength="5"
+        autocomplete="postal-code">
+    </div>
+
+    <div class="field">
+      <button class="filter-toggle" id="filter-toggle" type="button">
+        <i class="chevron">▶</i> Filter by store (optional)
+      </button>
+      <div class="filter-panel" id="filter-panel">
+        <div class="filter-panel-title">Show results from:</div>
+        <div class="checkbox-grid">
+          <label class="check-label"><input type="checkbox" value="walmart"> Walmart</label>
+          <label class="check-label"><input type="checkbox" value="target"> Target</label>
+          <label class="check-label"><input type="checkbox" value="costco"> Costco</label>
+          <label class="check-label"><input type="checkbox" value="giant food"> Giant Food</label>
+          <label class="check-label"><input type="checkbox" value="kroger"> Kroger</label>
+          <label class="check-label"><input type="checkbox" value="aldi"> Aldi</label>
+        </div>
+      </div>
+    </div>
+
+    <button class="search-btn" id="search-btn">Compare Prices</button>
+  </div>
+
+  <!-- Error -->
+  <div id="error" class="error-card hidden"></div>
+
+  <!-- Loading -->
+  <div id="loading" class="loading hidden">
+    <div class="spinner"></div>
+    <div>Checking prices…</div>
+  </div>
+
+  <!-- Results -->
+  <div id="results" class="hidden">
+    <div class="results-label" id="results-label"></div>
+    <div id="results-list"></div>
+  </div>
+</main>
+
+<script>
+  // ── Restore saved ZIP ──────────────────────────────────────────────────────
+  const zipInput = document.getElementById('zipcode');
+  const saved = localStorage.getItem('pricechecker-zip');
+  if (saved) zipInput.value = saved;
+
+  // ── Filter toggle ──────────────────────────────────────────────────────────
+  document.getElementById('filter-toggle').addEventListener('click', function () {
+    this.classList.toggle('open');
+    document.getElementById('filter-panel').classList.toggle('open');
+  });
+
+  // ── Search triggers ────────────────────────────────────────────────────────
+  document.getElementById('search-btn').addEventListener('click', doSearch);
+  document.getElementById('product').addEventListener('keydown', e => { if (e.key === 'Enter') doSearch(); });
+  document.getElementById('zipcode').addEventListener('keydown', e => { if (e.key === 'Enter') doSearch(); });
+
+  // ── Main search ────────────────────────────────────────────────────────────
+  async function doSearch() {
+    const product = document.getElementById('product').value.trim();
+    const zip     = zipInput.value.trim();
+
+    if (!product) { document.getElementById('product').focus(); return; }
+    if (!zip)     { zipInput.focus(); return; }
+
+    const retailers = [...document.querySelectorAll('.checkbox-grid input:checked')].map(el => el.value);
+
+    localStorage.setItem('pricechecker-zip', zip);
+
+    setLoading(true);
+    hide('results');
+    hide('error');
+
+    try {
+      const res = await fetch('/api/compare', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          product,
+          zip_code: zip,
+          retailers: retailers.length ? retailers : null,
+          max_results: 10,
+        }),
+      });
+
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || 'Search failed');
+      renderResults(data.results, product);
+    } catch (err) {
+      showError(err.message || 'Something went wrong. Please try again.');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  // ── Render results ─────────────────────────────────────────────────────────
+  function renderResults(results, query) {
+    const list  = document.getElementById('results-list');
+    const label = document.getElementById('results-label');
+    list.innerHTML = '';
+
+    if (!results || results.length === 0) {
+      list.innerHTML = '<div class="empty">No results found.<br>Try a different search or ZIP code.</div>';
+      label.textContent = '';
+    } else {
+      label.textContent = `${results.length} result${results.length !== 1 ? 's' : ''} for "${query}"`;
+      results.forEach((r, i) => list.appendChild(buildCard(r, i === 0)));
+    }
+
+    show('results');
+    document.getElementById('results').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+
+  function buildCard(r, isBest) {
+    const card = document.createElement('div');
+    card.className = 'result-card' + (isBest ? ' best' : '');
+
+    const confMap = { H: 'High confidence', M: 'Medium confidence', L: 'Low confidence' };
+
+    const unitText = (r.unit_price != null && r.unit_label)
+      ? `$${r.unit_price.toFixed(4)}/${esc(r.unit_label)}`
+      : '';
+
+    const meta = (r.unit_count && r.unit_label)
+      ? `${r.unit_count} ${esc(r.unit_label)} · ${confMap[r.confidence] || ''}`
+      : '';
+
+    card.innerHTML = `
+      ${isBest ? '<div class="best-badge">✓ Best Value</div>' : ''}
+      <div class="result-store">${esc(r.retailer)}</div>
+      <div class="result-name">${esc(r.name)}</div>
+      <div class="result-pricing">
+        <span class="result-price">${esc(r.price_str)}</span>
+        ${unitText ? `<span class="result-unit">${unitText}</span>` : ''}
+      </div>
+      ${meta ? `<div class="result-meta">${meta}</div>` : ''}
+      ${r.url ? `<a class="result-link" href="${esc(r.url)}" target="_blank" rel="noopener noreferrer">View product ↗</a>` : ''}
+    `;
+    return card;
+  }
+
+  // ── Helpers ────────────────────────────────────────────────────────────────
+  function setLoading(on) {
+    const btn = document.getElementById('search-btn');
+    btn.disabled = on;
+    btn.textContent = on ? 'Searching…' : 'Compare Prices';
+    on ? show('loading') : hide('loading');
+  }
+
+  function showError(msg) {
+    const el = document.getElementById('error');
+    el.textContent = msg;
+    show('error');
+  }
+
+  function show(id) { document.getElementById(id).classList.remove('hidden'); }
+  function hide(id) { document.getElementById(id).classList.add('hidden'); }
+
+  function esc(s) {
+    return String(s ?? '')
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  }
+
+  // ── Service worker ─────────────────────────────────────────────────────────
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register('/sw.js');
+  }
+</script>
+</body>
+</html>
