@@ -51,6 +51,7 @@ async def run_comparison(
     retailer_filter: Optional[list[str]] = None,
     max_results: int = 3,
     mock: bool = False,
+    render: bool = True,
 ) -> list[dict]:
     """
     Fetch products via SerpAPI Google Shopping (or mock data), normalize each
@@ -63,9 +64,10 @@ async def run_comparison(
     from output import render_results
 
     if mock:
-        _console.print(
-            f'\n[dim]Using mock data for "[bold]{query}[/bold]" near {zip_code}[/dim]\n'
-        )
+        if render:
+            _console.print(
+                f'\n[dim]Using mock data for "[bold]{query}[/bold]" near {zip_code}[/dim]\n'
+            )
         raw_products = [RawProduct(**p) for p in _MOCK_PRODUCTS]
         if retailer_filter:
             def _mock_matches(retailer: str) -> bool:
@@ -76,47 +78,56 @@ async def run_comparison(
                 )
             raw_products = [p for p in raw_products if _mock_matches(p.retailer)]
     else:
-        _console.print(
-            f'\nSearching "[bold]{query}[/bold]" near {zip_code}...\n'
-        )
-
-        with Progress(
-            SpinnerColumn(),
-            TextColumn("{task.description}"),
-            console=_console,
-            transient=True,
-        ) as progress:
-            task = progress.add_task(
-                "  [dim]Google Shopping[/dim]  Fetching...", total=None
+        if render:
+            _console.print(
+                f'\nSearching "[bold]{query}[/bold]" near {zip_code}...\n'
             )
-            try:
-                raw_products = await google_shopping_search(
-                    query=query,
-                    zip_code=zip_code,
-                    retailer_filter=retailer_filter,
-                    max_results=max_results,
+            with Progress(
+                SpinnerColumn(),
+                TextColumn("{task.description}"),
+                console=_console,
+                transient=True,
+            ) as progress:
+                task = progress.add_task(
+                    "  [dim]Google Shopping[/dim]  Fetching...", total=None
                 )
-                count = len(raw_products)
-                progress.update(
-                    task,
-                    description=(
-                        f"  [green]✓[/green]  Google Shopping  "
-                        f"{count} result{'s' if count != 1 else ''}"
-                    ),
-                )
-                log.debug("SerpAPI search complete: %d products", count)
-            except EnvironmentError as e:
-                progress.stop()
-                _console.print(f"\n[red bold]Configuration error:[/red bold] {e}\n")
-                return []
-            except Exception as e:
-                progress.stop()
-                log.debug("SerpAPI search failed: %s", e, exc_info=True)
-                _console.print(f"\n[red bold]Search failed:[/red bold] {e}\n")
-                return []
+                try:
+                    raw_products = await google_shopping_search(
+                        query=query,
+                        zip_code=zip_code,
+                        retailer_filter=retailer_filter,
+                        max_results=max_results,
+                    )
+                    count = len(raw_products)
+                    progress.update(
+                        task,
+                        description=(
+                            f"  [green]✓[/green]  Google Shopping  "
+                            f"{count} result{'s' if count != 1 else ''}"
+                        ),
+                    )
+                    log.debug("SerpAPI search complete: %d products", count)
+                except EnvironmentError as e:
+                    progress.stop()
+                    _console.print(f"\n[red bold]Configuration error:[/red bold] {e}\n")
+                    return []
+                except Exception as e:
+                    progress.stop()
+                    log.debug("SerpAPI search failed: %s", e, exc_info=True)
+                    _console.print(f"\n[red bold]Search failed:[/red bold] {e}\n")
+                    return []
+        else:
+            raw_products = await google_shopping_search(
+                query=query,
+                zip_code=zip_code,
+                retailer_filter=retailer_filter,
+                max_results=max_results,
+            )
+            log.debug("SerpAPI search complete: %d products", len(raw_products))
 
     if not raw_products:
-        render_results(query, zip_code, [])
+        if render:
+            render_results(query, zip_code, [])
         return []
 
     # Normalize each product using pure Python regex heuristics (synchronous)
@@ -137,5 +148,6 @@ async def run_comparison(
         key=lambda r: r["unit_price"] if r["unit_price"] is not None else float("inf")
     )
 
-    render_results(query, zip_code, normalized)
+    if render:
+        render_results(query, zip_code, normalized)
     return normalized

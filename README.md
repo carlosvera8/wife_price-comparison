@@ -2,28 +2,63 @@
 
 Compares household product prices across Google Shopping results by ZIP code. Recommends the best value per unit.
 
-## Setup
+Available as a **mobile-friendly web app** (install to home screen on iOS/Android) or a classic **command-line tool**.
 
-### 1. Install Python dependencies
+---
+
+## Mobile App (Recommended)
+
+### 1. Install dependencies
 
 ```bash
-py -m pip install -r requirements.txt
+pip install -r requirements.txt
 ```
 
 ### 2. Get a free SerpAPI key
 
-Sign up at [serpapi.com](https://serpapi.com/) — the free tier gives you 100 searches/month, which is plenty for daily personal use.
+Sign up at [serpapi.com](https://serpapi.com/) — the free tier gives you 100 searches/month.
 
 ### 3. Add your API key
 
 ```bash
 cp .env.example .env
+# open .env and fill in your SERPAPI_KEY
 ```
 
-Then open `.env` and replace `your_serpapi_key_here` with your actual key:
+### 4. Start the server
+
+```bash
+uvicorn api:app --host 0.0.0.0 --port 8000
+```
+
+### 5. Open on your phone
+
+On any phone connected to the same Wi-Fi, open:
 
 ```
-SERPAPI_KEY=abc123yourkeyhere
+http://<your-computer-ip>:8000
+```
+
+> **Find your IP:** run `ipconfig` (Windows) or `ifconfig` (Mac/Linux) and look for your local address (e.g. `192.168.1.42`).
+
+### 6. Install to home screen
+
+**iPhone (Safari):** tap the Share button → "Add to Home Screen"
+
+**Android (Chrome):** tap the three-dot menu → "Add to Home Screen"
+
+The app will appear like any other app. Your ZIP code is remembered after the first search.
+
+---
+
+## Command-Line Tool
+
+### Setup
+
+```bash
+py -m pip install -r requirements.txt
+cp .env.example .env
+# fill in your SERPAPI_KEY
 ```
 
 ## Running
